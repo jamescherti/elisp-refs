@@ -1,11 +1,11 @@
-;;; elisp-refs.el --- find callers of elisp functions or macros -*- lexical-binding: t; -*-
+;;; elisp-refs.el --- Find callers of elisp functions or macros -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2016-2020  Wilfred Hughes <me@wilfred.me.uk>
 
 ;; Author: Wilfred Hughes <me@wilfred.me.uk>
 ;; Version: 1.6
 ;; Keywords: lisp
-;; Package-Requires: ((dash "2.12.0") (s "1.11.0"))
+;; Package-Requires: ((dash "2.12.0") (s "1.11.0") (emacs "29.1"))
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -59,16 +59,16 @@
      (s-join "," parts))))
 
 (defsubst elisp-refs--start-pos (end-pos)
-  "Find the start position of form ending at END-POS
+  "Find the start position of form ending at END-POS.
 in the current buffer."
   (let ((parse-sexp-ignore-comments t))
     (scan-sexps end-pos -1)))
 
 (defun elisp-refs--sexp-positions (buffer start-pos end-pos)
-  "Return a list of start and end positions of all the sexps
+  "Return a list of start and end positions of all the sexps.
 between START-POS and END-POS (inclusive) in BUFFER.
 
-Positions exclude quote characters, so given 'foo or `foo, we
+Positions exclude quote characters, so given \='foo or `foo, we
 report the position of the symbol foo.
 
 Not recursive, so we don't consider subelements of nested sexps."
@@ -112,6 +112,7 @@ non-nil, forms are read with `read-positioning-symbols'."
                     nil))
          (end-pos (point))
          (start-pos (elisp-refs--start-pos end-pos)))
+    (ignore read-with-symbol-positions)
     (list form start-pos end-pos symbols read-start-pos)))
 
 (defvar elisp-refs--path nil
@@ -119,7 +120,8 @@ non-nil, forms are read with `read-positioning-symbols'."
 Internal implementation detail.")
 
 (defun elisp-refs--read-all-buffer-forms (buffer symbols-with-pos)
-  "Read all the forms in BUFFER, along with their positions."
+  "Read all the forms in BUFFER, along with their positions.
+SYMBOLS-WITH-POS are the symbols with position."
   (with-current-buffer buffer
     (goto-char (point-min))
     (let ((forms nil))
@@ -147,9 +149,9 @@ Internal implementation detail.")
     (with-no-warnings (format-proper-list-p val))))
 
 (defun elisp-refs--walk (buffer form start-pos end-pos symbol match-p &optional path)
-  "Walk FORM, a nested list, and return a list of sublists (with
-their positions) where MATCH-P returns t. FORM is traversed
-depth-first (pre-order traversal, left-to-right).
+  "Walk FORM, a nested list, and return a list of sublists.
+It returns a list of sublists with their positions where MATCH-P returns t. FORM
+is traversed depth-first (pre-order traversal, left-to-right).
 
 MATCH-P is called with three arguments:
 \(SYMBOL CURRENT-FORM PATH).
@@ -276,6 +278,10 @@ START-POS and END-POS should be the position of FORM within BUFFER."
 
 (defun elisp-refs--variable-p (symbol form path)
   "Return t if this looks like a variable reference to SYMBOL.
+
+FORM is the current Lisp form being evaluated, and PATH is the list
+of parent form positions leading down to the current form.
+
 We consider parameters to be variables too."
   (cond
    ((consp form)
@@ -309,8 +315,8 @@ We consider parameters to be variables too."
 ;; TODO: benchmark building a list with `push' rather than using
 ;; mapcat.
 (defun elisp-refs--read-and-find (buffer symbol match-p)
-  "Read all the forms in BUFFER, and return a list of all forms that
-contain SYMBOL where MATCH-P returns t.
+  "Read all the forms in BUFFER, and return a list.
+It returns a list of all forms that contain SYMBOL where MATCH-P returns t.
 
 For every matching form found, we return the form itself along
 with its start and end position."
@@ -345,8 +351,7 @@ Assumes `symbol-with-pos-pos' is defined (Emacs 29+)."
     (--mapcat (elisp-refs--walk-positioned-symbols it symbol) forms))))
 
 (defun elisp-refs--read-and-find-symbol (buffer symbol)
-  "Read all the forms in BUFFER, and return a list of all
-positions of SYMBOL."
+  "Read all the forms in BUFFER, and return a list of all positions of SYMBOL."
   (let* ((symbols-with-pos (fboundp 'symbol-with-pos-pos))
          (forms (elisp-refs--read-all-buffer-forms buffer symbols-with-pos)))
 
@@ -416,7 +421,7 @@ Since `elisp-refs--syntax-highlight' is a hot function, we
 don't want to create lots of temporary buffers.")
 
 (defun elisp-refs--syntax-highlight (str)
-  "Apply font-lock properties to a string STR of Emacs lisp code."
+  "Apply font-lock properties to a string STR of Emacs Lisp code."
   ;; Ensure we have a highlighting buffer to work with.
   (unless (and elisp-refs--highlighting-buffer
                (buffer-live-p elisp-refs--highlighting-buffer))
@@ -442,7 +447,7 @@ don't want to create lots of temporary buffers.")
 
 (defun elisp-refs--lines (string)
   "Return a list of all the lines in STRING.
-'a\nb' -> ('a\n' 'b')"
+\='a\nb\=' -> (\='a\n\=' \='b\=')"
   (let ((lines nil))
     (while (> (length string) 0)
       (let ((index (s-index-of "\n" string)))
@@ -455,17 +460,16 @@ don't want to create lots of temporary buffers.")
     (nreverse lines)))
 
 (defun elisp-refs--map-lines (string fn)
-  "Execute FN for each line in string, and join the result together."
+  "Execute FN for each line in STRING, and join the result together."
   (let ((result nil))
     (dolist (line (elisp-refs--lines string))
       (push (funcall fn line) result))
     (apply #'concat (nreverse result))))
 
 (defun elisp-refs--unindent-rigidly (string)
-  "Given an indented STRING, unindent rigidly until
-at least one line has no indent.
+  "Given an indented STRING, unindent until at least one line has no indent.
 
-STRING should have a 'elisp-refs-start-pos property. The returned
+STRING should have a \='elisp-refs-start-pos property. The returned
 string will have this property updated to reflect the unindent."
   (let* ((lines (s-lines string))
          ;; Get the leading whitespace for each line.
@@ -479,11 +483,11 @@ string will have this property updated to reflect the unindent."
      'elisp-refs-unindented min-indent)))
 
 (defun elisp-refs--containing-lines (buffer start-pos end-pos)
-  "Return a string, all the lines in BUFFER that are between
-START-POS and END-POS (inclusive).
+  "Return the lines in BUFFER containing the range START-POS to END-POS.
 
-For the characters that are between START-POS and END-POS,
-propertize them."
+The returned string is expanded to full line boundaries. Characters between
+START-POS and END-POS are syntax-highlighted, while the surrounding text on
+those lines is propertized with the comment face."
   (let (expanded-start-pos expanded-end-pos)
     (with-current-buffer buffer
       ;; Expand START-POS and END-POS to line boundaries.
@@ -507,10 +511,10 @@ propertize them."
                     (propertize after-match
                                 'face 'font-lock-comment-face))))
         (-> text
-          (elisp-refs--replace-tabs)
-          (elisp-refs--unindent-rigidly)
-          (propertize 'elisp-refs-start-pos expanded-start-pos
-                      'elisp-refs-path elisp-refs--path))))))
+            (elisp-refs--replace-tabs)
+            (elisp-refs--unindent-rigidly)
+            (propertize 'elisp-refs-start-pos expanded-start-pos
+                        'elisp-refs-path elisp-refs--path))))))
 
 (defun elisp-refs--find-file (button)
   "Open the file referenced by BUTTON."
@@ -551,7 +555,7 @@ propertize them."
 
 (defun elisp-refs--describe-button (symbol kind)
   "Return a button that shows *Help* for SYMBOL.
-KIND should be 'function, 'macro, 'variable, 'special or 'symbol."
+KIND should be \='function, \='macro, \='variable, \='special or \='symbol."
   (with-temp-buffer
     (insert (symbol-name kind) " ")
     (insert-text-button
@@ -570,6 +574,16 @@ KIND should be 'function, 'macro, 'variable, 'special or 'symbol."
 
 (defun elisp-refs--format-count (symbol ref-count file-count
                                         searched-file-count prefix)
+  "Format a user-facing summary string showing the search results for SYMBOL.
+
+REF-COUNT is the total number of references found across FILE-COUNT matching
+files.
+
+SEARCHED-FILE-COUNT is the total number of files scanned during the search.
+
+If PREFIX is non-nil, it is a directory path used to indicate that the search
+was restricted to loaded files under that directory. Otherwise, the summary
+indicates that all loaded files in Emacs were searched."
   (let* ((file-str (if (zerop file-count)
                        ""
                      (format " in %s" (elisp-refs--pluralize file-count "file"))))
@@ -589,8 +603,18 @@ KIND should be 'function, 'macro, 'variable, 'special or 'symbol."
 ;; that line. That's slightly confusing.
 (defun elisp-refs--show-results (symbol description results
                                         searched-file-count prefix)
-  "Given a RESULTS list where each element takes the form \(forms . buffer\),
-render a friendly results buffer."
+  "Render a user-friendly results buffer showing the references for SYMBOL.
+
+DESCRIPTION is a textual description of what was searched, used in the header
+summary.
+
+RESULTS is an alist of (FORMS . BUFFER) cells, where FORMS is a list of
+matches (including start and end positions) found within BUFFER.
+
+SEARCHED-FILE-COUNT is the total number of files scanned during the search.
+
+PREFIX is a directory path used to indicate the search boundary, or nil if all
+loaded files were searched globally."
   (let ((buf (get-buffer-create (format "*refs: %s*" symbol))))
     (switch-to-buffer buf)
     (let ((inhibit-read-only t))
@@ -628,14 +652,13 @@ render a friendly results buffer."
   (mapcar #'elisp-refs--contents-buffer (elisp-refs--loaded-paths)))
 
 (defun elisp-refs--search-1 (bufs match-fn)
-  "Call MATCH-FN on each buffer in BUFS, reporting progress
-and accumulating results.
+  "Call MATCH-FN on each buffer in BUFS and accumulate results.
 
-BUFS should be disposable: we make no effort to preserve their
-state during searching.
+BUFS should be disposable; we make no effort to preserve their state during
+searching.
 
-MATCH-FN should return a list where each element takes the form:
-\(form start-pos end-pos)."
+MATCH-FN should return a list where each element takes the form: \(form
+start-pos end-pos)."
   (let* (;; Our benchmark suggests we spend a lot of time in GC, and
          ;; performance improves if we GC less frequently.
          (gc-cons-percentage 0.8)
@@ -660,13 +683,18 @@ MATCH-FN should return a list where each element takes the form:
       forms-and-bufs)))
 
 (defun elisp-refs--search (symbol description match-fn &optional path-prefix)
-  "Find references to SYMBOL in all loaded files; call MATCH-FN on each buffer.
-When PATH-PREFIX, limit to loaded files whose path starts with that prefix.
+  "Find references to SYMBOL in loaded files and display the results.
 
-Display the results in a hyperlinked buffer.
+SYMBOL is the target symbol being searched.
 
-MATCH-FN should return a list where each element takes the form:
-\(form start-pos end-pos)."
+DESCRIPTION is a textual description of the search target, used in the summary
+header of the results buffer.
+
+MATCH-FN is a function called on each buffer. It must return a list of elements
+of the form (FORM START-POS END-POS) for each match found.
+
+Optional argument PATH-PREFIX is a directory path prefix. If non-nil, the search
+is limited to loaded files whose paths start with this prefix."
   (let* ((loaded-paths (elisp-refs--loaded-paths))
          (matching-paths (if path-prefix
                              (--filter (s-starts-with? path-prefix it) loaded-paths)
@@ -684,9 +712,9 @@ MATCH-FN should return a list where each element takes the form:
       (--each loaded-src-bufs (kill-buffer it)))))
 
 (defun elisp-refs--completing-read-symbol (prompt &optional filter)
-  "Read an interned symbol from the minibuffer,
-defaulting to the symbol at point. PROMPT is the string to prompt
-with.
+  "Read an interned symbol from the minibuffer,defaulting to the symbol at point.
+
+PROMPT is the string to prompt with.
 
 If FILTER is given, only offer symbols where (FILTER sym) returns
 t."
@@ -703,13 +731,16 @@ t."
 
 ;;;###autoload
 (defun elisp-refs-function (symbol &optional path-prefix)
-  "Display all the references to function SYMBOL, in all loaded
-elisp files.
+  "Display all the references to function SYMBOL in all loaded Elisp files.
 
-If called with a prefix, prompt for a directory to limit the search.
+SYMBOL is the function to search for.
 
-This searches for functions, not macros. For that, see
-`elisp-refs-macro'."
+Optional argument PATH-PREFIX is a directory path. If non-nil, the search is
+restricted to loaded files located under this directory.
+
+If called interactively with a prefix argument, prompt for PATH-PREFIX.
+
+This searches for functions, not macros. For that, see `elisp-refs-macro'."
   (interactive
    (list (elisp-refs--completing-read-symbol "Function: " #'functionp)
          (when current-prefix-arg
@@ -728,13 +759,16 @@ This searches for functions, not macros. For that, see
 
 ;;;###autoload
 (defun elisp-refs-macro (symbol &optional path-prefix)
-  "Display all the references to macro SYMBOL, in all loaded
-elisp files.
+  "Display all the references to macro SYMBOL in all loaded Elisp files.
 
-If called with a prefix, prompt for a directory to limit the search.
+SYMBOL is the macro to search for.
 
-This searches for macros, not functions. For that, see
-`elisp-refs-function'."
+Optional argument PATH-PREFIX is a directory path. If non-nil, the search is
+restricted to loaded files located under this directory.
+
+If called interactively with a prefix argument, prompt for PATH-PREFIX.
+
+This searches for macros, not functions. For that, see `elisp-refs-function'."
   (interactive
    (list (elisp-refs--completing-read-symbol "Macro: " #'macrop)
          (when current-prefix-arg
@@ -753,10 +787,15 @@ This searches for macros, not functions. For that, see
 
 ;;;###autoload
 (defun elisp-refs-special (symbol &optional path-prefix)
-  "Display all the references to special form SYMBOL, in all loaded
-elisp files.
+  "Display all the references to special form SYMBOL in all loaded Elisp files.
 
-If called with a prefix, prompt for a directory to limit the search."
+SYMBOL is the special form to search for.
+
+Optional argument PATH-PREFIX is a directory path. If non-nil, the search is
+restricted to loaded files located under this directory.
+
+If called interactively with a prefix argument, prompt for a directory to limit
+the search."
   (interactive
    (list (elisp-refs--completing-read-symbol "Special form: " #'special-form-p)
          (when current-prefix-arg
@@ -769,8 +808,12 @@ If called with a prefix, prompt for a directory to limit the search."
 
 ;;;###autoload
 (defun elisp-refs-variable (symbol &optional path-prefix)
-  "Display all the references to variable SYMBOL, in all loaded
-elisp files.
+  "Display all the references to variable SYMBOL in all loaded Elisp files.
+
+SYMBOL is the variable to search for.
+
+Optional argument PATH-PREFIX is a directory path. If non-nil, the search is
+restricted to loaded files located under this directory.
 
 If called with a prefix, prompt for a directory to limit the search."
   (interactive
@@ -789,10 +832,14 @@ If called with a prefix, prompt for a directory to limit the search."
 
 ;;;###autoload
 (defun elisp-refs-symbol (symbol &optional path-prefix)
-  "Display all the references to SYMBOL in all loaded elisp files.
+  "Display all the references to SYMBOL in all loaded Elisp files.
 
-If called with a prefix, prompt for a directory to limit the
-search."
+SYMBOL is the symbol to search for.
+
+Optional argument PATH-PREFIX is a directory path. If non-nil, the search is
+restricted to loaded files located under this directory.
+
+If called with a prefix, prompt for a directory to limit the search."
   (interactive
    (list (elisp-refs--completing-read-symbol "Symbol: " )
          (when current-prefix-arg
@@ -821,9 +868,10 @@ search."
 (define-derived-mode elisp-refs-mode special-mode "Refs"
   "Major mode for refs results buffers.")
 
-(defun elisp--refs-visit-match (open-fn)
+(defun elisp-refs--visit-match (open-fn)
   "Go to the search result at point.
-Open file with function OPEN_FN. `find-file` or `find-file-other-window`"
+OPEN-FN is the function used to open the matched file, such as `find-file' or
+`find-file-other-window'."
   (interactive)
   (let* ((path (get-text-property (point) 'elisp-refs-path))
          (pos (get-text-property (point) 'elisp-refs-start-pos))
@@ -857,12 +905,12 @@ Open file with function OPEN_FN. `find-file` or `find-file-other-window`"
 (defun elisp-refs-visit-match ()
   "Goto the search result at point."
   (interactive)
-  (elisp--refs-visit-match #'find-file))
+  (elisp-refs--visit-match #'find-file))
 
 (defun elisp-refs-visit-match-other-window ()
   "Goto the search result at point, opening in another window."
   (interactive)
-  (elisp--refs-visit-match #'find-file-other-window))
+  (elisp-refs--visit-match #'find-file-other-window))
 
 
 (defun elisp-refs--move-to-match (direction)
